@@ -1,3 +1,4 @@
+
 #include <SigFox.h>
 #include <ArduinoLowPower.h>
 
@@ -15,12 +16,20 @@ OneWire oneWire(ONE_WIRE_BUS);
 // Pass our oneWire reference to Dallas Temperature. 
 DallasTemperature sensors(&oneWire);
 
+typedef struct __attribute__ ((packed)) sigfox_message {
+  uint8_t _battery ; 
+  int16_t _temperature ; 
+} SigfoxMessage;
+
+// Stub for message which will be sent
+SigfoxMessage msg;
+
 
 //#define DEBUG
 
 
 void setup() {
-  Serial1.begin(9600);
+  Serial.begin(9600);
 
   sensors.begin(); 
   delay(100);
@@ -37,8 +46,9 @@ void setup() {
   SigFox.end();
 
 
-  analogReadResolution(12);//12bits
-  analogReference(AR_INTERNAL1V65);
+
+  analogReadResolution(10);//10bits
+  analogReference(AR_INTERNAL1V0);//1.0V built-in reference
 
   pinMode(1, INPUT_PULLUP);
   //LowPower.attachInterruptWakeup(RTC_ALARM_WAKEUP, alarmEvent0, CHANGE);
@@ -58,23 +68,30 @@ void loop()
   digitalWrite(LED_BUILTIN, LOW);
   #endif
   
-  byte temp1, temp2;
-  readTemp(&temp1, &temp2);
-  
+  int16_t temp1;
+  readTemp(&temp1);
+  /*
 
   String message;
   message += (char) readVcc();
-  message += (char) temp1;
-  message += (char) temp2;
+  message += (char) highByte(temp1);
+  Serial.print((char) highByte(temp1), HEX);
+  message += (char) lowByte(temp1);
+  Serial.print((char)lowByte(temp1), HEX);*/
 
+  msg._battery = (char) readVcc();
+  msg._temperature = temp1;
+
+  
+ 
   delay(1000);
   REG_EIC_INTFLAG = EIC_INTFLAG_EXTINT1;//clear flag on INT1 to avoid multiple interrupts
 
 
 #ifdef DEBUG
-    LowPower.deepSleep(5000);
+    delay(5000);
 #else
-    sendString(message);
+    sendString();
     Serial.flush();
     LowPower.deepSleep(3600000);
 #endif
@@ -86,10 +103,8 @@ void loop()
 byte readVcc (){
   // read the input on analog pin:
   int sensorValue = analogRead(ADC_BATTERY);
-  
 
-  float voltage = sensorValue * 0.123321123; //voltage in 1/100 Volt, 300 means 3.00V
-  //(165 / 4095)  / (33/(68+33))
+  float voltage = sensorValue * 0.299; // (1.0/(2^10-1))*(68+33)/33 *100
 
   #ifdef DEBUG
   Serial.print("Voltage(V): ");
@@ -100,10 +115,12 @@ byte readVcc (){
   if (voltage < 0) voltage = 0; //2.0V and below is 0
   if (voltage >= 255) voltage = 255; //4.55V and above is 255
 
+Serial.println((byte) voltage);
+
   return (byte) voltage;
 }
 
-void readTemp(byte *degree, byte *decimals){
+void readTemp(int16_t *degree){
    // call sensors.requestTemperatures() to issue a global temperature 
  // request to all devices on the bus 
 /********************************************************************/
@@ -119,23 +136,20 @@ void readTemp(byte *degree, byte *decimals){
    sensors.begin();
    sensors.requestTemperatures();
    temp = sensors.getTempCByIndex(0);
-    
  }
  
- *degree = (byte)((int) temp + 100);
- *decimals = (byte)((temp*100) - (int)(temp*100));
+ *degree = (int16_t) (temp*10.);
+
  
  #ifdef DEBUG
  Serial.print("Temperature is: ");
- Serial.print(*degree -100);
- Serial.print(".");
- Serial.println(*decimals);
+ Serial.println(*degree *0.1);
  #endif
 }
 
 
 
-void sendString(String str) {
+void sendString() {
   // Start the module
   SigFox.begin();
   // Wait at least 30mS after first configuration (100mS before)
@@ -145,10 +159,11 @@ void sendString(String str) {
   delay(1);
 
   // Remove EOL
-  str.trim();
+  //str.trim();
 
   SigFox.beginPacket();
-  SigFox.print(str);
+  //SigFox.print(str);
+  SigFox.write((uint8_t*)&msg, sizeof(SigfoxMessage));
 
   int ret = SigFox.endPacket();  // send buffer to SIGFOX network
 
